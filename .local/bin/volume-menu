@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# volume-menu -- pick the default output device (PipeWire / PulseAudio).
+# Opened by the waybar pulseaudio module (left click).
+set -uo pipefail
+
+export PATH="/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin:${PATH:-}"
+
+FONT="JetBrainsMono Nerd Font 11"
+
+ICON_SPEAKER=$'\U000f04c3'
+ICON_HEADPHONES=$'\U000f02cb'
+ICON_BLUETOOTH=$'\U000f00af'
+ICON_MONITOR=$'\U000f0379'
+ICON_USB=$'\U000f0553'
+ICON_MIXER=$'\U000f0493'
+ICON_MUTE=$'\U000f075f'
+ICON_CHECK=$'\U000f012c'
+
+notify() { # title, body, icon
+    notify-send -a waybar -i "${3:-audio-speakers}" "$1" "$2" 2>/dev/null || true
+}
+
+sink_icon() {
+    local text="${1,,}"
+    case "$text" in
+        *bluetooth*|*bluez*)                     echo "$ICON_BLUETOOTH" ;;
+        *headphone*|*headset*)                   echo "$ICON_HEADPHONES" ;;
+        *hdmi*|*displayport*|*digital*output*|*tv*) echo "$ICON_MONITOR" ;;
+        *usb*)                                   echo "$ICON_USB" ;;
+        *)                                       echo "$ICON_SPEAKER" ;;
+    esac
+}
+
+if ! command -v pactl >/dev/null 2>&1; then
+    notify "Output device" "pactl is not available" dialog-error
+    exit 1
+fi
+
+default_sink=$(pactl get-default-sink 2>/dev/null || true)
+if [ -z "$default_sink" ]; then
+    default_sink=$(pactl info 2>/dev/null | sed -n 's/^Default Sink: //p')
+fi
+
+# name <TAB> description <TAB> volume <TAB> mute
+mapfile -t sink_rows < <(pactl -f json list sinks 2>/dev/null | python3 -c '
+import json, sys
+try:
+    sinks = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for sink in sinks:
+    name = sink.get("name", "")
+    desc = sink.get("description") or name
+    vol = (sink.get("volume") or {}).get("front-left", {}).get("value_percent", "")
+    muted = "yes" if sink.get("mute") else "no"
+    print("\t".join([name, desc, vol, muted]))
+')
+
+if [ "${#sink_rows[@]}" -eq 0 ]; then
+    notify "Output device" "No audio output devices found" dialog-error
+    exit 1
+fi
+
+labels=()
+actions=()
+declare -A descriptions=()
+
+for row in "${sink_rows[@]}"; do
+    IFS=$'\t' read -r name desc vol muted <<<"$row"
+    descriptions["$name"]="$desc"
+    icon=$(sink_icon "$desc $name")
+    state="${vol:-unknown}"
+    [ "$muted" = "yes" ] && state+=" · muted"
+    marker=""
+    [ "$name" = "$default_sink" ] && marker="  $ICON_CHECK"
+    labels+=("$icon  $desc  ·  $state$marker")
+    actions+=("sink:$name")
+done
+
+labels+=("$ICON_MIXER  System mixer")
+actions+=("mixer")
+
+if [ -n "$default_sink" ]; then
+    if [ "$(pactl get-sink-mute "$default_sink" 2>/dev/null | awk '{print $2}')" = "yes" ]; then
+        labels+=("$ICON_MUTE  Unmute output")
+        actions+=("unmute")
+    else
+        labels+=("$ICON_MUTE  Mute output")
+        actions+=("mute")
+    fi
+fi
+
+default_desc="${descriptions[$default_sink]:-none}"
+choice=$(printf '%s\n' "${labels[@]}" |
+    rofi -dmenu -i -no-custom -p "󰕾 output" -font "$FONT" \
+        -mesg "Current output: <b>$default_desc</b>" \
+        -theme-str 'window { width: 540px; }') || exit 0
+[ -z "$choice" ] && exit 0
+
+action=""
+for i in "${!labels[@]}"; do
+    if [ "${labels[$i]}" = "$choice" ]; then
+        action="${actions[$i]}"
+        break
+    fi
+done
+
+case "$action" in
+    sink:*)
+        sink="${action#sink:}"
+        desc="${descriptions[$sink]:-$sink}"
+        if pactl set-default-sink "$sink" 2>/dev/null; then
+            while read -r input; do
+                pactl move-sink-input "$input" "$sink" 2>/dev/null || true
+            done < <(pactl list short sink-inputs 2>/dev/null | cut -f1)
+            notify "Output device" "Switched to $desc" audio-speakers
+        else
+            notify "Output device" "Could not switch to $desc" dialog-error
+        fi
+        ;;
+    mixer)
+        exec pavucontrol
+        ;;
+    mute)
+        pactl set-sink-mute @DEFAULT_SINK@ 1 2>/dev/null || true
+        ;;
+    unmute)
+        pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null || true
+        ;;
+esac

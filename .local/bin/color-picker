@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# color-picker -- click a pixel, copy its hex value to the clipboard.
+set -uo pipefail
+
+point="$(slurp -p -b 2f1e2ecc -c 815ba4ff -w 2 -f '%x,%y')" || exit 0
+[ -n "$point" ] || exit 0
+
+tmp="$(mktemp --suffix=.png)"
+trap 'rm -f "$tmp"' EXIT
+
+grim -g "$point 1x1" "$tmp" || exit 1
+
+hex="$(python3 - "$tmp" <<'EOF'
+import sys
+
+import gi
+
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import GdkPixbuf
+
+pixbuf = GdkPixbuf.Pixbuf.new_from_file(sys.argv[1])
+pixels = pixbuf.get_pixels()
+r, g, b = pixels[0], pixels[1], pixels[2]
+print(f"#{r:02x}{g:02x}{b:02x}")
+EOF
+)"
+
+[ -n "$hex" ] || exit 1
+
+printf '%s' "$hex" | wl-copy >/dev/null 2>&1
+notify-send -a screenshot "Colour picked" "$hex copied to clipboard"
+printf '%s\n' "$hex"

@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+# network-menu -- connection status, DHCP and DNS for systemd-networkd + systemd-resolved.
+# Usage: network-menu [menu|details|dns|wifi]   (no argument = main menu)
+set -uo pipefail
+
+export PATH="/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin:${PATH:-}"
+
+FONT="JetBrainsMono Nerd Font 11"
+DNS_DROPIN="99-waybar-dns.conf"
+
+ICON_ETHERNET=$'\U000f0200'
+ICON_WIFI=$'\U000f05a9'
+ICON_WIFI_OFF=$'\U000f05aa'
+ICON_DNS=$'\U000f048b'
+ICON_INFO=$'\U000f02fc'
+ICON_CHECK=$'\U000f012c'
+ICON_REFRESH=$'\U000f0450'
+ICON_BACK=$'\U000f0141'
+ICON_COG=$'\U000f0493'
+ICON_WARN=$'\U000f0026'
+ICON_LOCK=$'\U000f033e'
+
+NETWORKCTL=$(command -v networkctl 2>/dev/null || echo /usr/sbin/networkctl)
+RESOLVECTL=$(command -v resolvectl 2>/dev/null || echo /usr/sbin/resolvectl)
+
+notify() { # title, body, icon
+    notify-send -a waybar -i "${3:-network-wired}" "$1" "$2" 2>/dev/null || true
+}
+
+main_iface() {
+    local iface path
+    iface=$(ip -o route show default 2>/dev/null | awk '{print $5; exit}')
+    if [ -n "$iface" ]; then
+        echo "$iface"
+        return
+    fi
+    for path in /sys/class/net/*; do
+        iface=${path##*/}
+        [ "$iface" = "lo" ] && continue
+        [ "$(cat "$path/operstate" 2>/dev/null)" = "up" ] && {
+            echo "$iface"
+            return
+        }
+    done
+}
+
+wifi_iface() {
+    local path
+    for path in /sys/class/net/*; do
+        [ -d "$path/wireless" ] && {
+            echo "${path##*/}"
+            return
+        }
+    done
+}
+
+iface_ipv4() {
+    ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4; exit}'
+}
+
+iface_state() {
+    "$NETWORKCTL" status "$1" --no-pager 2>/dev/null | sed -n 's/^ *State: //p' | head -n1
+}
+
+network_file() {
+    "$NETWORKCTL" status "$1" --no-pager 2>/dev/null | sed -n 's/^ *Network File: //p' | head -n1
+}
+
+dns_effective() {
+    "$RESOLVECTL" dns "$1" 2>/dev/null | awk -F': ' 'NF > 1 {print $2}' | head -n1
+}
+
+dns_dropin_path() {
+    printf '%s.d/%s' "$1" "$DNS_DROPIN"
+}
+
+dns_persisted() {
+    local file
+    file=$(dns_dropin_path "$1")
+    [ -r "$file" ] || return 0
+    sed -n 's/^[[:space:]]*DNS=//p' "$file" | head -n1
+}
+
+normalize_servers() {
+    tr ',' ' ' | xargs 2>/dev/null
+}
+
+show_details() {
+    local iface="$1" state ip gw dns speed msg
+    state=$(iface_state "$iface")
+    ip=$(iface_ipv4 "$iface")
+    gw=$(ip route show default dev "$iface" 2>/dev/null | awk '{print $3; exit}')
+    dns=$(dns_effective "$iface")
+    speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+
+    msg="$ICON_ETHERNET  $iface"$'\n\n'
+    msg+="State    ${state:-unknown}"$'\n'
+    msg+="Address  ${ip:--}"$'\n'
+    msg+="Gateway  ${gw:--}"$'\n'
+    msg+="DNS      ${dns:-none}"$'\n'
+    [ -n "${speed:-}" ] && msg+="Link     ${speed} Mb/s"$'\n'
+
+    rofi -e "$msg" -font "$FONT" -theme-str 'window { width: 430px; }'
+}
+
+renew_lease() {
+    local iface="$1"
+    if pkexec "$NETWORKCTL" renew "$iface"; then
+        "$RESOLVECTL" flush-caches 2>/dev/null || true
+        notify "Network" "DHCP lease renewed on $iface" network-wired
+    else
+        notify "Network" "Could not renew the lease on $iface" dialog-error
+    fi
+}
+
+wifi_info() {
+    local wiface="$1" state manager
+    [ -z "$wiface" ] && {
+        rofi -e "No wireless interface found." -font "$FONT"
+        return
+    }
+    state=$(cat "/sys/class/net/$wiface/operstate" 2>/dev/null)
+    if command -v nmcli >/dev/null 2>&1; then
+        manager="NetworkManager (nmcli)"
+    elif command -v iwctl >/dev/null 2>&1; then
+        manager="iwd (iwctl)"
+    else
+        manager="none"
+    fi
+    rofi -e "$ICON_WIFI  $wiface — ${state:-unknown}
+
+Manager: $manager
+
+This system is configured with systemd-networkd. This menu handles the
+wired link, DHCP and DNS. To scan and join Wi-Fi networks, install iwd or
+NetworkManager first." -font "$FONT" -theme-str 'window { width: 470px; }'
+}
+
+strip_ansi() {
+    sed -E 's/\x1B\[[0-9;]*[mK]//g'
+}
+
+wifi_state() {
+    command -v iwctl >/dev/null 2>&1 || return 0
+    iwctl station "$1" show 2>/dev/null | strip_ansi |
+        sed -n 's/^ *State  *//p' | head -n1 | sed 's/[[:space:]]*$//'
+}
+
+wifi_ssid() {
+    command -v iwctl >/dev/null 2>&1 || return 0
+    iwctl station "$1" show 2>/dev/null | strip_ansi |
+        sed -n 's/^ *Connected network  *//p' | head -n1 | sed 's/[[:space:]]*$//'
+}
+
+connect_wifi() {
+    local dev="$1" ssid="$2" sec="$3" pass ipv4 _
+    case "$sec" in
+        open)
+            if ! iwctl --dont-ask station "$dev" connect "$ssid" >/dev/null 2>&1; then
+                notify "Wi-Fi" "Could not connect to $ssid" dialog-error
+                return 1
+            fi
+            ;;
+        psk)
+            pass=$(rofi -dmenu -password -p "󰌾 password" -font "$FONT" \
+                -mesg "Network: <b>$ssid</b>" \
+                -theme-str 'window { width: 440px; }') || exit 0
+            [ -z "$pass" ] && exit 0
+            if ! iwctl --dont-ask --passphrase "$pass" station "$dev" connect "$ssid" >/dev/null 2>&1; then
+                notify "Wi-Fi" "Could not connect to $ssid — wrong password?" dialog-error
+                return 1
+            fi
+            ;;
+        *)
+            rofi -e "$ICON_LOCK  $ssid uses $sec authentication.
+
+Configure it manually with iwctl." -font "$FONT"
+            return 1
+            ;;
+    esac
+
+    for _ in $(seq 1 20); do
+        ipv4=$(iface_ipv4 "$dev")
+        [ -n "$ipv4" ] && break
+        sleep 0.5
+    done
+    if [ -n "$ipv4" ]; then
+        notify "Wi-Fi connected" "$ssid · $ipv4" network-wireless
+    else
+        notify "Wi-Fi connected" "$ssid · waiting for DHCP" network-wireless
+    fi
+}
+
+wifi_menu() {
+    local dev="$1" rows=() labels=() actions=() connected state line sig sec ssid
+    local label choice action kind
+
+    if ! command -v iwctl >/dev/null 2>&1; then
+        wifi_info "$dev"
+        return
+    fi
+    [ -z "$dev" ] && {
+        rofi -e "No wireless interface found." -font "$FONT"
+        return
+    }
+
+    iwctl station "$dev" scan >/dev/null 2>&1 || true
+    sleep 2
+    mapfile -t rows < <(iwctl station "$dev" get-networks 2>/dev/null | strip_ansi)
+
+    state=$(wifi_state "$dev")
+    connected=$(wifi_ssid "$dev")
+
+    for line in "${rows[@]}"; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line#\>}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+        case "$line" in
+            *"Network name"*|*"Available networks"*|-----*) continue ;;
+        esac
+        sig="${line##* }"
+        [[ "$sig" =~ ^\*+$ ]] || continue
+        line="${line% *}"
+        line="${line%"${line##*[![:space:]]}"}"
+        sec="${line##* }"
+        ssid="${line% *}"
+        ssid="${ssid%"${ssid##*[![:space:]]}"}"
+        [ -z "$ssid" ] && continue
+
+        label="$ICON_WIFI  $ssid  ·  $sig"
+        [ "$sec" != "open" ] && label+="  $ICON_LOCK"
+        [ "$ssid" = "$connected" ] && label+="  $ICON_CHECK"
+        labels+=("$label")
+        actions+=("connect"$'\t'"$ssid"$'\t'"$sec")
+    done
+
+    if [ "${#labels[@]}" -eq 0 ]; then
+        labels+=("$ICON_WARN  No Wi-Fi networks found")
+        actions+=("rescan")
+    fi
+    if [ "$state" = "connected" ] && [ -n "$connected" ]; then
+        labels+=("$ICON_WIFI_OFF  Disconnect from $connected")
+        actions+=("disconnect")
+    fi
+    labels+=("$ICON_REFRESH  Rescan")
+    actions+=("rescan")
+    labels+=("$ICON_BACK  Back")
+    actions+=("back")
+
+    choice=$(printf '%s\n' "${labels[@]}" |
+        rofi -dmenu -i -no-custom -p "󰖩 wi-fi" -font "$FONT" \
+            -mesg "Interface <b>$dev</b> · ${state:-unknown}${connected:+ · <b>$connected</b>}" \
+            -theme-str 'window { width: 560px; }') || exit 0
+    [ -z "$choice" ] && exit 0
+
+    action=""
+    for i in "${!labels[@]}"; do
+        if [ "${labels[$i]}" = "$choice" ]; then
+            action="${actions[$i]}"
+            break
+        fi
+    done
+
+    case "$action" in
+        disconnect)
+            iwctl station "$dev" disconnect >/dev/null 2>&1 || true
+            notify "Wi-Fi" "Disconnected from $connected" network-wireless
+            ;;
+        rescan)
+            exec "$0" wifi
+            ;;
+        back|"")
+            exec "$0"
+            ;;
+        connect*)
+            IFS=$'\t' read -r kind ssid sec <<<"$action"
+            connect_wifi "$dev" "$ssid" "$sec"
+            ;;
+    esac
+}
+
+apply_dns() {
+    local iface="$1" netfile="$2" servers="$3" label="$4"
+    if pkexec /usr/bin/bash -c '
+set -e
+iface=$1
+netfile=$2
+servers=$3
+dropin="$netfile.d/99-waybar-dns.conf"
+if [ "$servers" = "auto" ]; then
+    rm -f "$dropin"
+    rmdir --ignore-fail-on-non-empty "$netfile.d" 2>/dev/null || true
+else
+    mkdir -p "$netfile.d"
+    printf "[Network]\nDNS=%s\n\n[DHCPv4]\nUseDNS=no\n\n[DHCPv6]\nUseDNS=no\n" "$servers" > "$dropin"
+fi
+networkctl reload
+networkctl reconfigure "$iface" || true
+resolvectl flush-caches || true
+' _ "$iface" "$netfile" "$servers"; then
+        notify "DNS · $label" "Applied to $iface" network-wired
+    else
+        notify "DNS" "Change cancelled or failed" dialog-error
+    fi
+}
+
+dns_menu() {
+    local iface="$1" netfile persisted current active active_idx labels choice action
+    netfile=$(network_file "$iface")
+    if [ -z "$netfile" ]; then
+        rofi -e "No systemd-networkd .network file was found for $iface." -font "$FONT"
+        return
+    fi
+
+    persisted=$(dns_persisted "$netfile")
+    current=$(dns_effective "$iface")
+    persisted_norm=$(normalize_servers <<<"$persisted")
+
+    active="auto"
+    case "$persisted_norm" in
+        "1.1.1.1 1.0.0.1")               active="cloudflare" ;;
+        "8.8.8.8 8.8.4.4")               active="google" ;;
+        "9.9.9.9 149.112.112.112")       active="quad9" ;;
+        "")                              active="auto" ;;
+        *)                               active="custom" ;;
+    esac
+
+    labels=(
+        "$ICON_REFRESH  Automatic · DHCP / router"
+        "$ICON_DNS  Cloudflare · 1.1.1.1 · 1.0.0.1"
+        "$ICON_DNS  Google · 8.8.8.8 · 8.8.4.4"
+        "$ICON_DNS  Quad9 · 9.9.9.9 · 149.112.112.112"
+        "$ICON_COG  Custom…"
+        "$ICON_BACK  Back"
+    )
+
+    active_idx=0
+    case "$active" in
+        auto)       labels[0]+="  $ICON_CHECK" ;;
+        cloudflare) labels[1]+="  $ICON_CHECK" ; active_idx=1 ;;
+        google)     labels[2]+="  $ICON_CHECK" ; active_idx=2 ;;
+        quad9)      labels[3]+="  $ICON_CHECK" ; active_idx=3 ;;
+        custom)     labels[4]="$ICON_COG  Custom · $persisted  $ICON_CHECK" ; active_idx=4 ;;
+    esac
+
+    choice=$(printf '%s\n' "${labels[@]}" |
+        rofi -dmenu -i -no-custom -selected-row "$active_idx" -p "󰇧 dns" -font "$FONT" \
+            -mesg "Link: <b>$iface</b>   Current: <b>${current:-none}</b>" \
+            -theme-str 'window { width: 520px; }') || exit 0
+
+    case "$choice" in
+        *Automatic*)  apply_dns "$iface" "$netfile" auto "Automatic (DHCP)" ;;
+        *Cloudflare*) apply_dns "$iface" "$netfile" "1.1.1.1 1.0.0.1" "Cloudflare" ;;
+        *Google*)     apply_dns "$iface" "$netfile" "8.8.8.8 8.8.4.4" "Google" ;;
+        *Quad9*)      apply_dns "$iface" "$netfile" "9.9.9.9 149.112.112.112" "Quad9" ;;
+        *Custom*)
+            custom=$(rofi -dmenu -p "󰇧 custom dns" -font "$FONT" \
+                -mesg "Space-separated IP addresses, e.g. <b>1.1.1.1 1.0.0.1</b>" \
+                -theme-str 'window { width: 500px; }') || exit 0
+            custom=${custom//,/ }
+            custom=$(echo "$custom" | xargs 2>/dev/null)
+            [ -z "$custom" ] && exit 0
+            # shellcheck disable=SC2086
+            if ! python3 -c 'import ipaddress, sys
+try:
+    list(map(ipaddress.ip_address, sys.argv[1:]))
+except ValueError:
+    raise SystemExit(1)' $custom 2>/dev/null; then
+                rofi -e "That is not a valid list of IP addresses." -font "$FONT"
+                exit 1
+            fi
+            apply_dns "$iface" "$netfile" "$custom" "Custom ($custom)"
+            ;;
+        *Back*) exec "$0" ;;
+    esac
+}
+
+main_menu() {
+    local iface ipv4 state dns_now wiface wstate wssid labels=() actions=() choice action i
+
+    iface=$(main_iface)
+    if [ -z "$iface" ]; then
+        rofi -e "$ICON_WIFI_OFF  No active network connection" -font "$FONT"
+        return
+    fi
+
+    state=$(iface_state "$iface")
+    ipv4=$(iface_ipv4 "$iface")
+    dns_now=$(dns_effective "$iface")
+    [ -z "$dns_now" ] && dns_now="none"
+
+    labels+=("$ICON_ETHERNET  $iface · ${state:-unknown} · ${ipv4:-no address}")
+    actions+=(details)
+
+    wiface=$(wifi_iface)
+    if [ -n "$wiface" ]; then
+        if command -v iwctl >/dev/null 2>&1; then
+            wstate=$(wifi_state "$wiface")
+            wssid=$(wifi_ssid "$wiface")
+            if [ "$wstate" = "connected" ] && [ -n "$wssid" ]; then
+                labels+=("$ICON_WIFI  $wiface · $wssid")
+            else
+                labels+=("$ICON_WIFI  $wiface · scan networks…")
+            fi
+        else
+            wstate=$(cat "/sys/class/net/$wiface/operstate" 2>/dev/null)
+            if [ "$wstate" = "up" ]; then
+                labels+=("$ICON_WIFI  $wiface · up")
+            else
+                labels+=("$ICON_WIFI_OFF  $wiface · Wi-Fi down")
+            fi
+        fi
+        actions+=(wifi)
+    fi
+
+    labels+=("$ICON_DNS  DNS · $dns_now")
+    actions+=(dns)
+    labels+=("$ICON_REFRESH  Renew DHCP lease")
+    actions+=(renew)
+    labels+=("$ICON_INFO  Connection details")
+    actions+=(details)
+
+    choice=$(printf '%s\n' "${labels[@]}" |
+        rofi -dmenu -i -no-custom -p "󰈀 network" -font "$FONT" \
+            -mesg "$ICON_ETHERNET <b>$iface</b> · ${ipv4:-disconnected}   $ICON_DNS <b>$dns_now</b>" \
+            -theme-str 'window { width: 540px; }') || exit 0
+    [ -z "$choice" ] && exit 0
+
+    action=""
+    for i in "${!labels[@]}"; do
+        if [ "${labels[$i]}" = "$choice" ]; then
+            action="${actions[$i]}"
+            break
+        fi
+    done
+
+    case "$action" in
+        dns)
+            dns_menu "$iface"
+            ;;
+        renew)
+            renew_lease "$iface"
+            ;;
+        wifi)
+            if command -v iwctl >/dev/null 2>&1; then
+                wifi_menu "$wiface"
+            else
+                wifi_info "$wiface"
+            fi
+            ;;
+        *)
+            show_details "$iface"
+            ;;
+    esac
+}
+
+case "${1:-menu}" in
+    dns)     dns_menu "$(main_iface)" ;;
+    details) show_details "$(main_iface)" ;;
+    wifi)    if command -v iwctl >/dev/null 2>&1; then wifi_menu "$(wifi_iface)"; else wifi_info "$(wifi_iface)"; fi ;;
+    *)       main_menu ;;
+esac

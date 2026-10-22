@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# screenshot -- region / window / monitor / all, saved and copied to clipboard.
+#
+#   screenshot              pick a mode from a rofi menu
+#   screenshot region       drag a rectangle
+#   screenshot window       the focused window
+#   screenshot monitor      the focused output
+#   screenshot all          every output
+#   screenshot --clip ...   clipboard only, nothing written to disk
+#   screenshot --delay 3 region    wait 3s before capturing
+#
+set -uo pipefail
+
+DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
+FONT="JetBrainsMono Nerd Font 11"
+SLURP=(-b 2f1e2ecc -c 815ba4ff -w 2 -f "%x,%y %wx%h")
+
+mode=""
+clip=0
+delay=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        region|window|monitor|all|menu) mode="$1" ;;
+        --clip) clip=1 ;;
+        --delay)
+            shift
+            delay="${1:-0}"
+            ;;
+        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "screenshot: unknown argument '$1'" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+active_window_geometry() {
+    hyprctl activewindow -j 2>/dev/null | python3 -c '
+import json, subprocess, sys
+
+win = json.load(sys.stdin)
+if not win or not win.get("mapped") or not win.get("size"):
+    sys.exit(1)
+
+x, y = win.get("at", [0, 0])
+w, h = win["size"]
+try:
+    monitors = json.loads(subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True).stdout)
+except Exception:
+    monitors = []
+
+mon = next((m for m in monitors if m.get("id") == win.get("monitor")), None)
+if mon:
+    mx, my = mon["x"], mon["y"]
+    x2, y2 = max(x, mx), max(y, my)
+    w = min(x + w, mx + mon["width"]) - x2
+    h = min(y + h, my + mon["height"]) - y2
+    x, y = x2, y2
+
+if w <= 0 or h <= 0:
+    sys.exit(1)
+print(f"{x},{y} {w}x{h}")
+'
+}
+
+focused_monitor() {
+    hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+monitors = json.load(sys.stdin)
+print(next((m["name"] for m in monitors if m.get("focused")), ""))
+'
+}
+
+if [ -z "$mode" ] || [ "$mode" = "menu" ]; then
+    choice=$(printf '%s\n' \
+        "Region" \
+        "Window" \
+        "Monitor" \
+        "All screens" \
+        "Region (clipboard only)" |
+        rofi -dmenu -i -p "screenshot" -font "$FONT" -theme-str 'window { width: 320px; }')
+
+    case "$choice" in
+        "Region (clipboard only)") mode=region; clip=1 ;;
+        "Region") mode=region ;;
+        "Window") mode=window ;;
+        "Monitor") mode=monitor ;;
+        "All screens") mode=all ;;
+        *) exit 0 ;;
+    esac
+fi
+
+if [ "$delay" -gt 0 ] 2>/dev/null; then
+    sleep "$delay"
+fi
+
+tmp="$(mktemp --suffix=.png)"
+trap 'rm -f "$tmp"' EXIT
+
+case "$mode" in
+    region)
+        geom="$(slurp "${SLURP[@]}")" || exit 0
+        [ -n "$geom" ] || exit 0
+        grim -g "$geom" "$tmp" || exit 1
+        ;;
+    window)
+        geom="$(active_window_geometry)"
+        if [ -z "$geom" ]; then
+            notify-send -a screenshot "Screenshot" "No active window to capture"
+            exit 1
+        fi
+        grim -g "$geom" "$tmp" || exit 1
+        ;;
+    monitor)
+        name="$(focused_monitor)"
+        [ -n "$name" ] || exit 1
+        grim -o "$name" "$tmp" || exit 1
+        ;;
+    all)
+        grim "$tmp" || exit 1
+        ;;
+esac
+
+if [ ! -s "$tmp" ]; then
+    notify-send -a screenshot "Screenshot" "Capture failed"
+    exit 1
+fi
+
+out=""
+if [ "$clip" -eq 0 ]; then
+    mkdir -p "$DIR"
+    stamp="$(date +%Y-%m-%d_%H-%M-%S)"
+    out="$DIR/$stamp.png"
+    n=1
+    while [ -e "$out" ]; do
+        out="$DIR/${stamp}_$n.png"
+        n=$((n + 1))
+    done
+    cp -- "$tmp" "$out"
+fi
+
+wl-copy -t image/png < "$tmp" >/dev/null 2>&1
+
+if [ -n "$out" ]; then
+    notify-send -a screenshot -i "$out" "Screenshot saved" \
+        "$(basename "$out") · copied to clipboard"
+    printf '%s\n' "$out"
+else
+    notify-send -a screenshot -i image-x-generic "Screenshot" "Copied to clipboard"
+fi

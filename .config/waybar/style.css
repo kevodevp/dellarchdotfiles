@@ -1,0 +1,230 @@
+/* waybar style — palette shared with rofi (purple theme) and kitty
+ *
+ * surfaces/accent: rofi purple theme   (#2f1e2e, #815ba4, #ef6155)
+ * text/ansi colors: kitty config       (#eff0f1, #60be78, #53b7ec, ...)
+ */
+
+@define-color base     #2f1e2e;   /* rofi window background          */
+@define-color mantle   #251721;   /* tooltip / menu surface          */
+@define-color surface0 #3b2839;   /* pills, borders                  */
+@define-color surface1 #4a3347;   /* hover                           */
+
+@define-color text     #eff0f1;   /* kitty foreground                */
+@define-color subtext  #b4b4b4;   /* rofi foreground                 */
+@define-color muted    #7f8c8d;   /* kitty color8                    */
+
+@define-color purple   #815ba4;   /* rofi accent                     */
+@define-color accent   #b48ead;   /* kitty color5 (magenta)          */
+@define-color red      #e06060;   /* kitty color1                    */
+@define-color urgent   #ef6155;   /* rofi urgent                     */
+@define-color green    #60be78;   /* kitty color2                    */
+@define-color yellow   #d8a657;   /* kitty color3                    */
+@define-color blue     #53b7ec;   /* kitty color4                    */
+@define-color cyan     #6ec7c7;   /* kitty color6                    */
+
+* {
+    all: unset;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 13px;
+}
+
+window#waybar {
+    background-color: @base;
+    border-bottom: 1px solid @purple;
+}
+
+tooltip {
+    background-color: @mantle;
+    border: 1px solid @surface0;
+    border-radius: 0;
+    padding: 6px 10px;
+}
+
+tooltip label {
+    color: @text;
+}
+
+menu {
+    background-color: @mantle;
+    border: 1px solid @surface0;
+    border-radius: 0;
+    padding: 4px;
+}
+
+menu menuitem {
+    padding: 6px 10px;
+    border-radius: 0;
+    color: @subtext;
+}
+
+menu menuitem:hover {
+    background-color: @purple;
+    color: #ffffff;
+}
+
+/* ---------- shared module pill ---------- */
+
+#workspaces,
+#clock,
+#pulseaudio,
+#battery,
+#network,
+#cpu,
+#memory,
+#disk,
+#custom-music,
+#custom-power,
+#tray {
+    color: @text;
+    padding: 0 8px;
+    margin: 2px 0;
+    border-radius: 0;
+}
+
+/* ---------- workspaces ---------- */
+
+#workspaces {
+    padding: 0 4px;
+}
+
+#workspaces button {
+    padding: 0 6px;
+    margin: 0;
+    border-radius: 0;
+    color: @subtext;
+    font-size: 16px;
+    transition: all 0.2s ease-in-out;
+}
+
+#workspaces button.empty {
+    color: @muted;
+}
+
+#workspaces button.active {
+    color: @accent;
+    font-weight: bold;
+}
+
+#workspaces button.urgent {
+    background-color: @urgent;
+    color: @base;
+}
+
+/* ---------- clock ---------- */
+
+#clock {
+    color: @text;
+    font-weight: bold;
+}
+
+/* ---------- pulseaudio ---------- */
+
+#pulseaudio {
+    color: @text;
+}
+
+#pulseaudio.muted {
+    color: @muted;
+}
+
+/* ---------- battery ---------- */
+
+#battery {
+    color: @green;
+}
+
+#battery.charging {
+    color: @cyan;
+}
+
+#battery.warning:not(.charging) {
+    color: @yellow;
+}
+
+#battery.critical:not(.charging) {
+    color: @red;
+}
+
+/* ---------- network ---------- */
+
+#network {
+    color: @text;
+}
+
+#network.linked {
+    color: @muted;
+}
+
+#network.disconnected {
+    color: @urgent;
+}
+
+/* ---------- cpu / memory / disk ---------- */
+
+#cpu {
+    color: @accent;
+}
+
+#memory,
+#disk {
+    color: @text;
+}
+
+#disk.warning {
+    color: @accent;
+}
+
+#disk.critical {
+    color: @urgent;
+}
+
+/* ---------- dynamic module hover ---------- */
+
+#pulseaudio:hover,
+#network:hover,
+#memory:hover,
+#disk:hover,
+#clock:hover {
+    background-color: @surface0;
+}
+
+/* ---------- music ---------- */
+
+#image.cover {
+    margin: 2px 0 2px 8px;
+    padding: 0;
+}
+
+#custom-music {
+    color: @accent;
+}
+
+#custom-music.paused {
+    color: @subtext;
+}
+
+#custom-music.stopped {
+    color: @muted;
+}
+
+/* ---------- power button ---------- */
+
+#custom-power {
+    color: @subtext;
+    font-size: 15px;
+}
+
+#custom-power:hover {
+    color: @urgent;
+}
+
+/* ---------- tray ---------- */
+
+#tray > .passive {
+    -gtk-icon-effect: dim;
+}
+
+#tray > .needs-attention {
+    background-color: @urgent;
+    border-radius: 0;
+}

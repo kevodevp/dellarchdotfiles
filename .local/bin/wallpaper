@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# wallpaper <image> -- set the hyprpaper wallpaper now and remember it.
+set -uo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "usage: wallpaper <image>" >&2
+    exit 2
+fi
+
+img="$(readlink -f -- "$1" 2>/dev/null)"
+if [ -z "$img" ] || [ ! -f "$img" ]; then
+    echo "wallpaper: no such file: $1" >&2
+    exit 1
+fi
+
+mon="$(hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+monitors = json.load(sys.stdin)
+print(next((m["name"] for m in monitors if m.get("focused")), monitors[0]["name"] if monitors else "eDP-1"))
+' 2>/dev/null)"
+mon="${mon:-eDP-1}"
+
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprpaper.conf"
+
+# Only rewrite the path so any other hyprpaper settings are left alone.
+if [ -f "$conf" ] && grep -q '^[[:space:]]*path[[:space:]]*=' "$conf"; then
+    sed -i "s|^\([[:space:]]*path[[:space:]]*=\).*|\1 $img|" "$conf"
+else
+    cat > "$conf" <<EOF
+wallpaper {
+    monitor = $mon
+    path = $img
+    fit_mode = cover
+}
+EOF
+fi
+
+hyprctl hyprpaper preload "$img" >/dev/null 2>&1
+hyprctl hyprpaper wallpaper "$mon,$img" >/dev/null
+printf 'wallpaper: %s on %s\n' "$img" "$mon"

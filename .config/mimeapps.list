@@ -1,0 +1,19 @@
+
+[Default Applications]
+image/png=qimgv.desktop
+image/jpeg=qimgv.desktop
+image/gif=qimgv.desktop
+image/webp=qimgv.desktop
+image/bmp=qimgv.desktop
+image/tiff=qimgv.desktop
+image/svg+xml=qimgv.desktop
+image/x-icon=qimgv.desktop
+image/vnd.microsoft.icon=qimgv.desktop
+image/avif=qimgv.desktop
+image/heic=qimgv.desktop
+image/heif=qimgv.desktop
+image/jxl=qimgv.desktop
+image/x-xcf=qimgv.desktop
+image/x-portable-pixmap=qimgv.desktop
+image/x-portable-graymap=qimgv.desktop
+image/x-portable-bitmap=qimgv.desktop

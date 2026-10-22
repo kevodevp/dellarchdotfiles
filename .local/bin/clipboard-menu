@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# clipboard-menu [--delete] -- pick an entry from the clipboard history and
+# copy it back to the clipboard, or delete it from the history.
+set -uo pipefail
+
+dir="${XDG_CACHE_HOME:-$HOME/.cache}/clipboard"
+entries="$dir/entries"
+index="$dir/index"
+
+delete=0
+[ "${1:-}" = "--delete" ] && delete=1
+
+if [ ! -s "$index" ]; then
+    notify-send -a clipboard "Clipboard" "History is empty"
+    exit 0
+fi
+
+prompt="clipboard"
+[ "$delete" -eq 1 ] && prompt="delete clip"
+
+choice=$(cut -f2- "$index" |
+    rofi -dmenu -i -p "$prompt" -font "JetBrainsMono Nerd Font 11" \
+        -theme-str 'window { width: 640px; }') || exit 0
+[ -n "$choice" ] || exit 0
+
+line=$(cut -f2- "$index" | grep -n -F -x -- "$choice" | head -1 | cut -d: -f1)
+[ -n "$line" ] || exit 0
+
+hash=$(sed -n "${line}p" "$index" | cut -f1)
+
+if [ "$delete" -eq 1 ]; then
+    sed -i "${line}d" "$index"
+    rm -f -- "$entries/$hash"
+else
+    wl-copy < "$entries/$hash" >/dev/null 2>&1
+fi

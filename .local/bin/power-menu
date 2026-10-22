@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# power-menu [action] -- session menu (sleep / shutdown / restart / logout).
+# With an action argument the menu is skipped, e.g. `power-menu suspend`.
+set -uo pipefail
+
+FONT="JetBrainsMono Nerd Font 11"
+LABELS=(
+    $'\uf186  Sleep'
+    $'\uf011  Shutdown'
+    $'\uf021  Restart'
+    $'\uf08b  Logout'
+)
+
+run() {
+    case "$1" in
+        sleep|suspend) systemctl suspend ;;
+        shutdown|poweroff) systemctl poweroff ;;
+        restart|reboot) systemctl reboot ;;
+        logout|exit) hyprctl dispatch 'hl.dsp.exit()' ;;
+        *)
+            echo "power-menu: unknown action '$1'" >&2
+            exit 2
+            ;;
+    esac
+}
+
+if [ $# -gt 0 ]; then
+    run "$1"
+    exit 0
+fi
+
+choice=$(printf '%s\n' "${LABELS[@]}" |
+    rofi -dmenu -i -p "session" -font "$FONT" -theme-str 'window { width: 260px; }') || exit 0
+
+case "$choice" in
+    *Sleep*) run sleep ;;
+    *Shutdown*) run shutdown ;;
+    *Restart*) run restart ;;
+    *Logout*) run logout ;;
+esac

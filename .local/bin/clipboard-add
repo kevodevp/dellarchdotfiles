@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# clipboard-add -- read stdin and push it to the clipboard history.
+# Started at login via `wl-paste --watch clipboard-add`.
+set -uo pipefail
+
+dir="${XDG_CACHE_HOME:-$HOME/.cache}/clipboard"
+entries="$dir/entries"
+index="$dir/index"
+mkdir -p "$entries"
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp"
+
+size=$(wc -c < "$tmp")
+# Ignore empty clips and anything unreasonable (>1 MiB).
+[ "$size" -eq 0 ] && exit 0
+[ "$size" -gt 1048576 ] && exit 0
+
+hash=$(sha1sum "$tmp" | cut -d' ' -f1)
+preview=$(head -c 300 "$tmp" | tr '\n\t\r' '   ' | sed 's/  */ /g; s/^ //; s/ $//')
+[ -n "$preview" ] || exit 0
+[ "$size" -gt 300 ] && preview="$preview…"
+
+cp -- "$tmp" "$entries/$hash"
+
+# Newest first, one line per entry, capped at 100.
+{
+    printf '%s\t%s\n' "$hash" "$preview"
+    if [ -f "$index" ]; then
+        grep -v -F -- "$hash$(printf '\t')" "$index"
+    fi
+} | head -n 100 > "$index.new"
+
+mv "$index.new" "$index"
