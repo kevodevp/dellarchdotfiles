@@ -5,9 +5,7 @@
   "modules-left": [
     "hyprland/workspaces"
   ],
-  "modules-center": [
-    "hyprland/window"
-  ],
+  "modules-center": [],
   "modules-right": [
     "image#cover",
     "custom/music",
@@ -21,13 +19,6 @@
   ],
   "reload_style_on_change": true,
 
-  "hyprland/window": {
-    "format": "{class}  {title}",
-    "icon": false,
-    "max-length": 50,
-    "separate-outputs": true,
-    "tooltip": false
-  },
   "hyprland/workspaces": {
     "format": "{icon}",
     "tooltip": false,

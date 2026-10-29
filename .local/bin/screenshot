@@ -70,7 +70,9 @@ print(next((m["name"] for m in monitors if m.get("focused")), ""))
 '
 }
 
+menu_used=0
 if [ -z "$mode" ] || [ "$mode" = "menu" ]; then
+    menu_used=1
     choice=$(printf '%s\n' \
         "Region" \
         "Window" \
@@ -87,6 +89,20 @@ if [ -z "$mode" ] || [ "$mode" = "menu" ]; then
         "All screens") mode=all ;;
         *) exit 0 ;;
     esac
+fi
+
+if [ "$menu_used" -eq 1 ]; then
+    # Rofi is a layer surface. Wait until Hyprland has destroyed it before
+    # capturing; otherwise the fading menu ends up in the screenshot.
+    # no_anim is set for the rofi layer in hyprland.lua, so this is quick.
+    if command -v hyprctl >/dev/null 2>&1; then
+        for _ in $(seq 1 30); do
+            hyprctl layers -j 2>/dev/null | grep -q '"namespace": "rofi"' || break
+            sleep 0.02
+        done
+    else
+        sleep 0.15
+    fi
 fi
 
 if [ "$delay" -gt 0 ] 2>/dev/null; then

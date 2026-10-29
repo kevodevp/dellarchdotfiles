@@ -59,14 +59,19 @@ local bin           = home .. "/.local/bin"
 --   hl.exec_cmd("waybar & hyprpaper & firefox")
 -- end)
 
--- Wallpaper daemon. The wallpaper itself is set in ~/.config/hypr/hyprpaper.conf
--- (currently ~/1.png). "pgrep ... ||" keeps this idempotent: hyprpaper is only
--- started when it is not already running, so config reloads don't spawn copies.
-hl.exec_cmd("pgrep -x hyprpaper >/dev/null || hyprpaper")
+-- Autostart at session start. Top-level exec_cmd() calls only run when the
+-- config is parsed (for example on a reload), so startup processes must be
+-- registered on the start event instead.
+hl.on("hyprland.start", function()
+    -- Wallpaper daemon. The wallpaper itself is set in hyprpaper.conf
+    -- (currently ~/Downloads/524440.jpg). "pgrep ... ||" keeps this
+    -- idempotent if the file is reloaded.
+    hl.exec_cmd("pgrep -x hyprpaper >/dev/null || hyprpaper")
 
--- Clipboard history: every copy is appended to ~/.cache/clipboard by
--- clipboard-add. pgrep -x avoids matching the shell that runs this line.
-hl.exec_cmd("pgrep -x wl-paste >/dev/null || wl-paste --watch " .. bin .. "/clipboard-add")
+    -- Clipboard history: every copy is appended to ~/.cache/clipboard by
+    -- clipboard-add. pgrep -x avoids matching the shell that runs this line.
+    hl.exec_cmd("pgrep -x wl-paste >/dev/null || wl-paste --watch " .. bin .. "/clipboard-add")
+end)
 
 
 -------------------------------
@@ -201,6 +206,10 @@ hl.animation({ leaf = "zoomFactor",    enabled = true,  speed = 7,    bezier = "
 --     border_size = 0,
 --     rounding    = 0,
 -- })
+
+-- Rofi is a layer surface, not a window: disable its close animation so the
+-- menu can never be captured while fading out (screenshot menu).
+hl.layer_rule({ name = "rofi-no-anim", match = { namespace = "rofi" }, no_anim = true })
 
 -- See https://wiki.hypr.land/Configuring/Layouts/Dwindle-Layout/ for more
 hl.config({

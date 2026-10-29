@@ -26,6 +26,13 @@ cp -a "$src/.config/." "$HOME/.config/"
 cp -a "$src/.local/." "$HOME/.local/"
 cp -a "$src/.bashrc" "$HOME/.bashrc"
 
+if command -v systemctl >/dev/null 2>&1; then
+    echo "Enabling user services..."
+    systemctl --user enable waybar.service hyprpolkitagent.service 2>/dev/null || true
+    pgrep -x waybar >/dev/null || systemctl --user start waybar.service 2>/dev/null || true
+    pgrep -x hyprpolkitagent >/dev/null || systemctl --user start hyprpolkitagent.service 2>/dev/null || true
+fi
+
 echo
 echo "Done. Next steps:"
 echo "  1. Install the system network files (see system/README.md)."

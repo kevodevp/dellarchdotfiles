@@ -127,6 +127,15 @@ cd dellarchdotfiles
 ./install.sh
 ```
 
+Waybar and the polkit agent run as systemd user services:
+
+```bash
+systemctl --user enable --now waybar.service hyprpolkitagent.service
+```
+
+Hyprpaper and the clipboard watcher are started by Hyprland's
+`hyprland.start` hook, so they come up with the session automatically.
+
 Core packages:
 
 ```bash
@@ -153,6 +162,10 @@ Install the system network files (needs root) as described in
 
 - `hyprland.lua` is the configuration Hyprland actually loads. An old
   `hyprland.conf` from the initial install is ignored and is not tracked here.
+- Waybar and `hyprpolkitagent` are enabled as systemd user services; hyprpaper
+  and the clipboard watcher start from the `hyprland.start` event.
+- Rofi has a `no_anim` layer rule and `screenshot` waits for its layer to
+  disappear before capturing, so menus never show up in screenshots.
 - Waybar's `on-click` commands use absolute `/home/brunomars/.local/bin/...`
   paths; adjust them if your username is different.
 - `hyprpaper.conf` points at `/home/brunomars/Downloads/524440.jpg`; change the
